@@ -13,6 +13,7 @@ module Rack
             Server.new_instance self, collection.find_one(id)
           rescue BSON::InvalidObjectId
           end
+          
 
           # Create a new authorization request. This holds state, so in addition
           # to client ID and scope, we need to know the URL to redirect back to
@@ -77,6 +78,8 @@ module Rack
         alias :device_code :_id
         # URI for the user to go to for device verification
         attr_accessor :verification_uri
+        # time for tracking how often we poll
+        attr_accessor :polled_at
         
         
 
@@ -104,6 +107,14 @@ module Rack
           self.class.collection.update({ :_id=>id }, { :$set=>{ :authorized_at=>authorized_at } })
         end
 
+        def polled! # mark when we poll this request, to do throttling if needed
+          self.class.collection.update({ :_id=>id, :revoked=>nil }, { :$set=>{ :polled_at=>Time.now.to_i } })
+        end  
+        
+        def too_soon?(interval_secs=5)
+          return (self.polled_at && (Time.now.to_i - self.polled_at < interval_secs))
+        end
+        
         Server.create_indexes do
           # Used to revoke all pending access grants when revoking client.
           collection.create_index [[:client_id, Mongo::ASCENDING]]

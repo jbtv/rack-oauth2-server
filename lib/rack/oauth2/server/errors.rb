@@ -98,7 +98,20 @@ module Rack
           super :unsupported_response_type, "The requested response type is not supported."
         end
       end
-
+      
+       # (Device flow) - user hasn't entered code and clicked OK yet
+      class AuthorizationPendingError < OAuthError
+        def initialize
+          super :authorization_pending, "User has not authorized wth the user_code yet"
+        end
+      end
+       # (Device flow) - client application is polling too fast
+       class SlowDownPollingError < OAuthError
+        def initialize(interval)
+          super :slow_down, "Client is polling too often - must be > #{interval} secs "
+        end
+      end
+      
     end
   end
 end

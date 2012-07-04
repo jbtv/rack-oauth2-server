@@ -190,7 +190,7 @@ module Rack
       #   end
       Options = Struct.new(:access_token_path, :authenticator, :authorization_types,
         :authorize_path, :database, :host, :param_authentication, :path, :realm, 
-        :expires_in,:logger, :collection_prefix, :device_path,:default_verification_path)
+        :expires_in,:logger, :collection_prefix, :device_code_path,:device_token_path,:default_verification_path,:polling_interval)
 
       # Global options. This is what we set during configuration (e.g. Rails'
       # config/application), and options all handlers inherit by default.
@@ -204,13 +204,15 @@ module Rack
         @app = app
         @options = options || Server.options
         @options.authenticator ||= authenticator
-        @options.access_token_path ||= "/oauth/access_token"
+        @options.access_token_path ||= "/oauth/access_token" # check here to get an access token
         @options.authorize_path ||= "/oauth/authorize"
         # device flow
-        @options.device_path ||= "/oauth/device/code" # request a code to show to user
+        @options.device_code_path ||= "/oauth/device/code" # request a code to show to user
+        @options.device_token_path ||= "/oauth/device/token" # poll here for an access token 
         @options.default_verification_path ||= "/device" # where to tell user to go to
+        @options.polling_interval ||= 5 # how often (secs) a client can poll for token updates
         
-        @options.authorization_types ||=  %w{code token device}
+        @options.authorization_types ||=  %w{code token device} # response_type which identifies the flow we are using
         @options.param_authentication ||= false
         @options.collection_prefix ||= "oauth2"
       end
@@ -232,7 +234,9 @@ module Rack
         return respond_with_access_token(request, logger) if request.path == options.access_token_path
         
         ## device flow
-        return request_device_code(request, logger) if request.path == options.device_path
+        return request_device_code(request, logger) if request.path == options.device_code_path
+        # re-use access token method, but respond at a different path to keep things organized
+        return respond_with_access_token(request, logger) if request.path == options.device_token_path
         
         # 5.  Accessing a Protected Resource
         if request.authorization
@@ -314,7 +318,7 @@ module Rack
         logger.info "RO2S: Client #{client.display_name} requested device code with scope #{auth_request.scope.join(" ")}" if logger
         
         # generate device code, user_code tell the user where to go
-        response={:device_code=>auth_request.device_code.to_s,:user_code=>auth_request.user_code,:verification_uri=>auth_request.verification_uri,:interval=>5}
+        response={:device_code=>auth_request.device_code.to_s,:user_code=>auth_request.user_code,:verification_uri=>auth_request.verification_uri,:interval=>options[:polling_interval]}
         return [200, { "Content-Type"=>"application/json", "Cache-Control"=>"no-store" }, [response.to_json]] 
       end
       
@@ -420,7 +424,7 @@ module Rack
         return [405, { "Content-Type"=>"application/json" }, ["POST only"]] unless request.post?
         # 4.2.  Access Token Response
         begin
-          client = get_client(request)
+          client = get_client(request) # requires client_id and client_secret
           case request.POST["grant_type"]
           when "none"
             # 4.1 "none" access grant type (i.e. two-legged OAuth flow)
@@ -459,6 +463,19 @@ module Rack
               identity = process_jwt_assertion(assertion)
               access_token = AccessToken.get_token_for(identity, client, requested_scope, options.expires_in)
             end
+          # device flow - not in core oAuth spec - this is the URI for this device type that Google uses
+          when "device","http://oauth.net/grant_type/device/1.0"
+            # see if access has been granted (device_code is _id)
+            auth_request = self.class.get_auth_request(request.POST["device_code"])
+            raise SlowDownPollingError, options.polling_interval if(auth_request.too_soon?)
+            auth_request.polled! # mark timestamp
+            raise  InvalidGrantError, "Wrong Client" unless auth_request && auth_request.client_id==client.id
+            raise AuthorizationPendingError unless auth_request && auth_request.grant_code
+            #otherwise looks like we have been granted access, lets get that token
+            grant = AccessGrant.from_code(auth_request.grant_code)
+
+            raise InvalidGrantError, "This access grant expired" if grant.expires_at && grant.expires_at <= Time.now.to_i
+            access_token = grant.authorize!(options.expires_in)
           else
             raise UnsupportedGrantType
           end
