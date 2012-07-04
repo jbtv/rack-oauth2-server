@@ -190,7 +190,8 @@ module Rack
       #   end
       Options = Struct.new(:access_token_path, :authenticator, :authorization_types,
         :authorize_path, :database, :host, :param_authentication, :path, :realm, 
-        :expires_in,:logger, :collection_prefix, :device_code_path,:device_token_path,:default_verification_path,:polling_interval)
+        :expires_in,:logger, :collection_prefix, :device_code_path,:device_token_path,
+        :default_verification_path,:polling_interval)
 
       # Global options. This is what we set during configuration (e.g. Rails'
       # config/application), and options all handlers inherit by default.
@@ -235,6 +236,7 @@ module Rack
         
         ## device flow
         return request_device_code(request, logger) if request.path == options.device_code_path
+       
         # re-use access token method, but respond at a different path to keep things organized
         return respond_with_access_token(request, logger) if request.path == options.device_token_path
         
@@ -389,13 +391,24 @@ module Rack
       def authorization_response(response, logger)
         status, headers, body = response
         auth_request = self.class.get_auth_request(headers["oauth.authorization"])
-        redirect_uri = URI.parse(auth_request.redirect_uri)
         if status == 403
           auth_request.deny!
         else
-          auth_request.grant! headers["oauth.identity"], options.expires_in
+          auth_request.grant! headers["oauth.identity"], options.expires_in # generates access grant
         end
         # 3.1.  Authorization Response
+        if(auth_request.response_type == "device_code")
+          # NO redirect!
+           if auth_request.grant_code
+              logger.info "RO2S: Client #{auth_request.client_id} granted access code #{auth_request.grant_code}" if logger
+              params = { :code=>auth_request.grant_code, :scope=>auth_request.scope.join(" "), :state=>auth_request.state }
+            else
+              logger.info "RO2S: Client #{auth_request.client_id} denied authorization" if logger
+              params = { :error=>:access_denied, :state=>auth_request.state }
+            end
+          return [status, {}, params.to_json]
+        else
+        redirect_uri = URI.parse(auth_request.redirect_uri)
         if auth_request.response_type == "code"
           if auth_request.grant_code
             logger.info "RO2S: Client #{auth_request.client_id} granted access code #{auth_request.grant_code}" if logger
@@ -417,6 +430,7 @@ module Rack
           redirect_uri.fragment = Rack::Utils.build_query(params)
         end
         return redirect_to(redirect_uri)
+      end
       end
 
       # 4.  Obtaining an Access Token

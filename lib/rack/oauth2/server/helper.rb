@@ -109,7 +109,7 @@ module Rack
         # @return 200
         def grant!(auth, identity = nil)
           auth, identity = authorization, auth unless identity
-          @response["oauth.authorization"] = auth.to_s
+          @response["oauth.authorization"] = auth.to_s 
           @response["oauth.identity"] = identity.to_s
           @response.status = 200
         end

@@ -14,6 +14,9 @@ module Rack
           rescue BSON::InvalidObjectId
           end
           
+          def find_from_user_code(user_code)
+           Server.new_instance self, collection.find({:user_code=>user_code}).first  
+          end
 
           # Create a new authorization request. This holds state, so in addition
           # to client ID and scope, we need to know the URL to redirect back to
@@ -89,7 +92,7 @@ module Rack
           return if revoked
           client = Client.find(client_id) or return
           self.authorized_at = Time.now.to_i
-          if response_type == "code" # Requested authorization code
+          if response_type == "code" || response_type=="device_code" # Requested authorization code
             access_grant = AccessGrant.create(identity, client, scope, redirect_uri)
             self.grant_code = access_grant.code
             self.class.collection.update({ :_id=>id, :revoked=>nil }, { :$set=>{ :grant_code=>access_grant.code, :authorized_at=>authorized_at } })
