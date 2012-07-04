@@ -18,6 +18,7 @@ module Rack
           # # :link -- Link to client Web site (e.g. http://uberclient.dot)
           # # :image_url -- URL of image to show alongside display name
           # # :redirect_uri -- Registered redirect URI.
+          # # :verification_uri -- Registered device verification URI.
           # # :scope -- List of names the client is allowed to request.
           # # :notes -- Free form text.
           # 
@@ -27,11 +28,14 @@ module Rack
           # how we learned that.
           def create(args)
             redirect_uri = Server::Utils.parse_redirect_uri(args[:redirect_uri]).to_s if args[:redirect_uri]
+            # try to parse device verification uri if it exists, otherwise the default path will be used
+            verification_uri = Server::Utils.parse_verification_uri(args[:verification_uri]).to_s if args[:verification_uri]
+            
             scope = Server::Utils.normalize_scope(args[:scope])
             fields =  { :display_name=>args[:display_name], :link=>args[:link],
                         :image_url=>args[:image_url], :redirect_uri=>redirect_uri,
                         :notes=>args[:notes].to_s, :scope=>scope,
-                        :created_at=>Time.now.to_i, :revoked=>nil }
+                        :created_at=>Time.now.to_i, :revoked=>nil,:verification_uri=>verification_uri }
             if args[:id] && args[:secret]
               fields[:_id], fields[:secret] = BSON::ObjectId(args[:id].to_s), args[:secret]
               collection.insert(fields, :safe=>true)
@@ -85,6 +89,8 @@ module Rack
         # Redirect URL. Supplied by the client if they want to restrict redirect
         # URLs (better security).
         attr_reader :redirect_uri
+        # URI to show to user for device verification
+        attr_reader :verification_uri
         # List of scope the client is allowed to request.
         attr_reader :scope
         # Free form fields for internal use.
@@ -98,6 +104,15 @@ module Rack
         # Counts how many access tokens were revoked.
         attr_reader :tokens_revoked
 
+        # return a default verification uri if one is not set on the client
+        def get_verification_uri
+           unless(verification_uri)
+            verification_uri = URI.parse(redirect_uri).normalize
+            verification_uri.path=Server.options[:default_verification_path]
+          end
+          verification_uri.to_s
+        end
+        
         # Revoke all authorization requests, access grants and access tokens for
         # this client. Ward off the evil.
         def revoke!

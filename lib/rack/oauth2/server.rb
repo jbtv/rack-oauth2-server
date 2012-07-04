@@ -190,7 +190,7 @@ module Rack
       #   end
       Options = Struct.new(:access_token_path, :authenticator, :authorization_types,
         :authorize_path, :database, :host, :param_authentication, :path, :realm, 
-        :expires_in,:logger, :collection_prefix)
+        :expires_in,:logger, :collection_prefix, :device_path,:default_verification_path)
 
       # Global options. This is what we set during configuration (e.g. Rails'
       # config/application), and options all handlers inherit by default.
@@ -206,7 +206,11 @@ module Rack
         @options.authenticator ||= authenticator
         @options.access_token_path ||= "/oauth/access_token"
         @options.authorize_path ||= "/oauth/authorize"
-        @options.authorization_types ||=  %w{code token}
+        # device flow
+        @options.device_path ||= "/oauth/device/code" # request a code to show to user
+        @options.default_verification_path ||= "/device" # where to tell user to go to
+        
+        @options.authorization_types ||=  %w{code token device}
         @options.param_authentication ||= false
         @options.collection_prefix ||= "oauth2"
       end
@@ -226,11 +230,15 @@ module Rack
         return request_authorization(request, logger) if request.path == options.authorize_path
         # 4.  Obtaining an Access Token
         return respond_with_access_token(request, logger) if request.path == options.access_token_path
-
+        
+        ## device flow
+        return request_device_code(request, logger) if request.path == options.device_path
+        
         # 5.  Accessing a Protected Resource
         if request.authorization
           # 5.1.1.  The Authorization Request Header Field
-          token = request.credentials if request.oauth?
+          # give token as Oauth or Bearer header
+          token = request.credentials if (request.oauth? || request.bearer?)
         elsif options.param_authentication && !request.GET["oauth_verifier"] # Ignore OAuth 1.0 callbacks
           # 5.1.2.  URI Query Parameter
           # 5.1.3.  Form-Encoded Body Parameter
@@ -285,7 +293,31 @@ module Rack
       end
 
     protected
-
+      ## Device Flow http://tools.ietf.org/html/draft-recordon-oauth-v2-device-00 
+      
+      # step 1 - request a new device code to show to the user  store it in db, linked to the client
+      
+      # this could be folded into request_authorization but since we access it from a dedicated path, 
+      # it makes sense to keep it distinct
+      def request_device_code(request,logger)
+        return [405, { "Content-Type"=>"application/json" }, ["POST only"]] unless request.post?
+        
+        state = request.GET["state"]
+        client = get_client(request, :dont_authenticate => true) # ignore missing client_secret
+        requested_scope = Utils.normalize_scope(request.GET["scope"])
+        allowed_scope = client.scope
+        raise InvalidScopeError unless (requested_scope - allowed_scope).empty?
+          # Create object to track authorization request and let application
+          # handle the rest.
+        auth_request = AuthRequest.create_for_device(client, requested_scope, state,options.default_verification_path)
+       
+        logger.info "RO2S: Client #{client.display_name} requested device code with scope #{auth_request.scope.join(" ")}" if logger
+        
+        # generate device code, user_code tell the user where to go
+        response={:device_code=>auth_request.device_code.to_s,:user_code=>auth_request.user_code,:verification_uri=>auth_request.verification_uri,:interval=>5}
+        return [200, { "Content-Type"=>"application/json", "Cache-Control"=>"no-store" }, [response.to_json]] 
+      end
+      
       # Get here for authorization request. Check the request parameters and
       # redirect with an error if we find any issue. Otherwise, create a new
       # authorization request, set in oauth.request and pass control to the
@@ -535,9 +567,13 @@ module Rack
           @authorization ||= AUTHORIZATION_KEYS.inject(nil) { |auth, key| auth || @env[key] }
         end
 
-        # True if authentication scheme is OAuth.
+        # True if authentication scheme is OAuth. - newer specs call it Bearer
         def oauth?
-          authorization[/^oauth/i] if authorization
+           authorization[/^oauth/i] if authorization
+        end
+        
+        def bearer?
+         	 authorization[/^bearer/i] if authorization
         end
 
         # True if authentication scheme is Basic.

@@ -26,7 +26,22 @@ module Rack
             fields[:_id] = collection.insert(fields)
             Server.new_instance self, fields
           end
-
+          
+          # we store different fields for the Device Flow
+          def create_for_device(client,scope,state,default_verification_uri)
+            verification_uri=client.get_verification_uri || default_verification_uri # take client default
+            user_code=Server.secure_random.slice(0,8).upcase # all upper-case Hex 
+            # device code is Mongo ID of this auth request
+            scope = Utils.normalize_scope(scope) & client.scope # Only allowed scope
+            fields = { :client_id=>client.id, :scope=>scope, :redirect_uri=>nil,
+                       :response_type=>"device_code", :state=>state,
+                       :grant_code=>nil, :authorized_at=>nil,
+                       :created_at=>Time.now.to_i, :revoked=>nil, 
+                        :user_code=>user_code,:verification_uri=>verification_uri}
+            fields[:_id] = collection.insert(fields)
+            Server.new_instance self, fields
+          end
+          
           def collection
             prefix = Server.options[:collection_prefix]
             Server.database["#{prefix}.auth_requests"]
@@ -56,6 +71,14 @@ module Rack
         attr_accessor :authorized_at
         # Timestamp if revoked.
         attr_accessor :revoked
+        # short random code shown to the user
+        attr_accessor :user_code
+        # long random code used for token polling (use Mongo ID)
+        alias :device_code :_id
+        # URI for the user to go to for device verification
+        attr_accessor :verification_uri
+        
+        
 
         # Grant access to the specified identity.
         def grant!(identity, expires_in = nil)
@@ -84,6 +107,9 @@ module Rack
         Server.create_indexes do
           # Used to revoke all pending access grants when revoking client.
           collection.create_index [[:client_id, Mongo::ASCENDING]]
+
+          # Used to find Auth Request when user puts in code on website
+          collection.create_index [[:user_code, Mongo::ASCENDING]]
         end
 
       end

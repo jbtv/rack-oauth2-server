@@ -15,6 +15,14 @@ module Rack
           raise InvalidRequestError, "Redirect URL must be absolute URL" unless uri.absolute? && uri.host
           uri
         end
+        
+        def parse_verification_uri(verification_uri)
+          raise InvalidRequestError, "Missing device verification URL" unless verification_uri
+          uri = URI.parse(verification_uri).normalize rescue nil
+          raise InvalidRequestError, "Redirect URL looks fishy to me" unless uri
+          raise InvalidRequestError, "Redirect URL must be absolute URL" unless uri.absolute? && uri.host
+          uri
+        end
 
         # Given scope as either array or string, return array of same names,
         # unique and sorted.
