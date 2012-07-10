@@ -308,9 +308,9 @@ module Rack
       def request_device_code(request,logger)
         return [405, { "Content-Type"=>"application/json" }, ["POST only"]] unless request.post?
         
-        state = request.GET["state"]
+        state = request.POST["state"]
         client = get_client(request, :dont_authenticate => true) # ignore missing client_secret
-        requested_scope = Utils.normalize_scope(request.GET["scope"])
+        requested_scope = Utils.normalize_scope(request.POST["scope"])
         allowed_scope = client.scope
         raise InvalidScopeError unless (requested_scope - allowed_scope).empty?
           # Create object to track authorization request and let application
